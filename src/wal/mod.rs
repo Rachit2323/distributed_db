@@ -33,4 +33,3 @@ pub fn clear_entry(table_name: &str)-> Result<(),String>
       Ok(())
 }
 
-pub fn recover

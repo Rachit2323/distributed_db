@@ -31,9 +31,15 @@ pub fn create_table(schema: &TableSchema) -> Result<(), String> {
             DataType::Integer => "Integer",
             DataType::Text    => "Text",
         };
-       
-   writeln!(schema_file, "{}:{}", col.name, type_str)
-            .map_err(|e| format!("Cannot write schema: {}", e))?;
+
+        let is_pk = schema.primary_key.as_deref() == Some(col.name.as_str());
+        if is_pk {
+            writeln!(schema_file, "{}:{}:PK", col.name, type_str)
+                .map_err(|e| format!("Cannot write schema: {}", e))?;
+        } else {
+            writeln!(schema_file, "{}:{}", col.name, type_str)
+                .map_err(|e| format!("Cannot write schema: {}", e))?;
+        }
     }
 
     // write csv file — just the header line (column names joined by comma)
@@ -121,6 +127,8 @@ pub fn read_rows(table_name: &str, schema: &TableSchema) -> Result<Vec<Row>, Str
 }
 
 
+
+
   pub fn load_schemas() -> Result<HashMap<String, TableSchema>, String> {
 
       let mut schemas = HashMap::new();
@@ -155,19 +163,26 @@ pub fn read_rows(table_name: &str, schema: &TableSchema) -> Result<Vec<Row>, Str
               .map_err(|e| format!("Cannot read schema file: {}", e))?;
 
           let mut columns = Vec::new();
+          let mut primary_key: Option<String> = None;
 
           for line in content.lines() {
               if line.is_empty() { continue; }
 
-              // split "id:Integer" → ["id", "Integer"]
-              let parts: Vec<&str> = line.splitn(2, ':').collect();
-              if parts.len() != 2 { continue; }
+              // split "id:Integer:PK" → ["id", "Integer", "PK"]
+              // or    "name:Text"     → ["name", "Text"]
+              let parts: Vec<&str> = line.splitn(3, ':').collect();
+              if parts.len() < 2 { continue; }
 
               let data_type = match parts[1] {
                   "Integer" => DataType::Integer,
                   "Text"    => DataType::Text,
                   _         => continue,
               };
+
+              // check for :PK suffix
+              if parts.len() == 3 && parts[2] == "PK" {
+                  primary_key = Some(parts[0].to_string());
+              }
 
               columns.push(ColumnDef {
                   name: parts[0].to_string(),
@@ -178,8 +193,38 @@ pub fn read_rows(table_name: &str, schema: &TableSchema) -> Result<Vec<Row>, Str
           schemas.insert(table_name.clone(), TableSchema {
               name: table_name,
               columns,
+              primary_key,
           });
       }
 
       Ok(schemas)
   }
+
+
+
+  pub fn rewrite_rows(table_name :&str, schema: &TableSchema, rows:Vec<Row>) -> Result<(),String>
+  {
+     let csv_path =format!("{}/{}.csv",DATA_DIR,table_name);
+     let mut file = File::create(csv_path).map_err(|e| format!("Issue while opening the file {:?}",e))?;
+     let header : Vec<&str> = schema.columns.iter().map(|c| c.name.as_str()).collect();
+     writeln!(file ,"{}", header.join(",")).map_err(|e| format!("Cannot write csv header {}",e))?;
+
+     for row in rows {
+     
+     let string : Vec<String>=  row.values.iter().map(|val| {
+        match val {
+            Value::Integer(n) => n.to_string(),
+            Value::Text(s)=> s.clone() ,
+            Value::Null => "".to_string()
+        }
+         
+     } ).collect();
+
+     writeln!(file ,"{}",string.join(",")).map_err(|e| "Error in writing this file".to_string())?;
+
+     }
+
+      Ok(())
+}
+
+

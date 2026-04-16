@@ -55,6 +55,8 @@ fn main() {
         match executor.execute(stmt) {
             QueryResult::Created => println!("Table created."),
             QueryResult::Inserted => println!("1 row inserted."),
+            QueryResult::Deleted(n) => println!("{} row(s) deleted.", n),
+            QueryResult::Updated(n) => println!("{} row(s) updated.", n),
             QueryResult::Error(e) => println!("Error: {}", e),
             QueryResult::Rows { columns, rows } => print_rows(columns, rows),
         }

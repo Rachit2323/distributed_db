@@ -14,6 +14,11 @@ enum Keyword {
     Where,
     Int,
     Text,
+    Delete,
+    Update,
+    Set,
+    Primary,
+    Key,
 }
 
 // ─── Tokens ───────────────────────────────────────────────────────────────────
@@ -46,6 +51,11 @@ fn word_to_token(word: &str) -> Token {
         "WHERE" => Token::Keyword(Keyword::Where),
         "INT" => Token::Keyword(Keyword::Int),
         "TEXT" => Token::Keyword(Keyword::Text),
+        "DELETE" => Token::Keyword(Keyword::Delete),
+        "UPDATE" => Token::Keyword(Keyword::Update),
+        "SET" => Token::Keyword(Keyword::Set),
+        "PRIMARY" => Token::Keyword(Keyword::Primary),
+        "KEY" => Token::Keyword(Keyword::Key),
         _ => Token::Identifier(word.to_string()),
     }
 }
@@ -55,7 +65,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     let mut word = String::new();
     let mut number = String::new();
 
-    // index-based loop so we can jump ahead when reading string literals
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;
 
@@ -63,7 +72,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
         let c = chars[i];
 
         if c.is_alphabetic() || c == '_' {
-            // flush any pending number first
             if !number.is_empty() {
                 let n = number.parse::<i64>().map_err(|e| e.to_string())?;
                 tokens.push(Token::IntLiteral(n));
@@ -72,7 +80,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             word.push(c.to_ascii_uppercase());
             i += 1;
         } else if c.is_ascii_digit() {
-            // flush any pending word first
             if !word.is_empty() {
                 tokens.push(word_to_token(&word));
                 word.clear();
@@ -80,7 +87,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             number.push(c);
             i += 1;
         } else if c == '\'' {
-            // flush pending word/number first
             if !word.is_empty() {
                 tokens.push(word_to_token(&word));
                 word.clear();
@@ -90,8 +96,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 tokens.push(Token::IntLiteral(n));
                 number.clear();
             }
-            // collect everything between the two ' marks
-            i += 1; // skip opening '
+            i += 1;
             let mut s = String::new();
             while i < chars.len() && chars[i] != '\'' {
                 s.push(chars[i]);
@@ -100,10 +105,9 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             if i >= chars.len() {
                 return Err("Unterminated string literal".to_string());
             }
-            i += 1; // skip closing '
+            i += 1;
             tokens.push(Token::StringLiteral(s));
         } else {
-            // flush pending word/number before handling symbol or space
             if !word.is_empty() {
                 tokens.push(word_to_token(&word));
                 word.clear();
@@ -133,7 +137,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
         }
     }
 
-    // flush anything left over at end of input
     if !word.is_empty() {
         tokens.push(word_to_token(&word));
     }
@@ -233,23 +236,31 @@ impl Parser {
     }
 
     fn parse_create_table(&mut self) -> Result<Statement, String> {
-        let mut word1 = self.expect_keyword(Keyword::Table)?;
-        let mut table_name = self.expect_identifier()?;
-        let paran = self.consume(); // consume 'TABLE'
-        println!("paran {:?} ", paran);
+        self.expect_keyword(Keyword::Table)?;
+        let table_name = self.expect_identifier()?;
+        self.consume(); // consume '('
 
-        let mut column = Vec::new();
+        let mut columns = Vec::new();
+        let mut primary_key: Option<String> = None;
+
         loop {
             let column_name = self.expect_identifier()?;
             let data_type = self.parse_data_type()?;
 
-            column.push(ColumnDef {
+            if let Some(Token::Keyword(Keyword::Primary)) = self.peek() {
+                self.consume(); 
+                self.expect_keyword(Keyword::Key)?; // consume KEY
+                primary_key = Some(column_name.clone());
+            }
+
+          
+
+            columns.push(ColumnDef {
                 name: column_name,
                 data_type,
             });
 
-            let mut key = self.peek();
-            match key {
+            match self.peek() {
                 Some(Token::Comma) => {
                     self.consume();
                     continue;
@@ -263,30 +274,27 @@ impl Parser {
             }
         }
 
-        return Ok(Statement::CreateTable {
+        Ok(Statement::CreateTable {
             table_name,
-            columns: column,
-        });
+            columns,
+            primary_key,
+        })
     }
 
     fn parse_insert(&mut self) -> Result<Statement, String> {
-        let mut key = self.expect_keyword(Keyword::Into)?;
+        self.expect_keyword(Keyword::Into)?;
         let table_name = self.expect_identifier()?;
-        let key2 = self.expect_keyword(Keyword::Values)?;
-        let leftparan = self.consume();
-        match leftparan {
-            Token::LParen => {} // OK
-            _ => return Err("Left_paranthesis_not_found".to_string()),
+        self.expect_keyword(Keyword::Values)?;
+
+        match self.consume() {
+            Token::LParen => {}
+            _ => return Err("Expected '('".to_string()),
         }
 
         let mut values = Vec::new();
-
         loop {
-            let val = self.parse_value()?;
-            values.push(val);
-            let token = self.peek();
-
-            match token {
+            values.push(self.parse_value()?);
+            match self.peek() {
                 Some(Token::Comma) => {
                     self.consume();
                     continue;
@@ -299,38 +307,23 @@ impl Parser {
                 None => return Err("Expected ',' or ')', found end of input".to_string()),
             }
         }
-        return Ok(Statement::Insert {
-            table_name,
-            values: values,
-        });
+
+        Ok(Statement::Insert { table_name, values })
     }
 
     fn parse_select(&mut self) -> Result<Statement, String> {
-        // assume SELECT already consumed before calling this
-
-        // handle '*' (you can expand later)
         self.consume(); // consume '*'
-
-        // expect FROM
         self.expect_keyword(Keyword::From)?;
-
-        // table name
         let table_name = self.expect_identifier()?;
 
-        // check if WHERE exists (optional)
         let where_clause = if let Some(Token::Keyword(Keyword::Where)) = self.peek() {
-            self.consume(); // consume WHERE
-
+            self.consume();
             let column = self.expect_identifier()?;
-
-            // expect '='
             match self.consume() {
                 Token::Equals => {}
                 t => return Err(format!("Expected '=', found {:?}", t)),
             }
-
             let value = self.parse_value()?;
-
             Some(WhereClause { column, value })
         } else {
             None
@@ -341,26 +334,73 @@ impl Parser {
             where_clause,
         })
     }
+
+    fn parse_delete(&mut self) -> Result<Statement, String> {
+        self.expect_keyword(Keyword::From)?;
+        let table_name = self.expect_identifier()?;
+        self.expect_keyword(Keyword::Where)?;
+        let column_name = self.expect_identifier()?;
+
+        match self.consume() {
+            Token::Equals => {}
+            t => return Err(format!("Expected '=', found {:?}", t)),
+        }
+
+        let val = self.parse_value()?;
+        Ok(Statement::Delete {
+            table_name,
+            where_clause: WhereClause {
+                column: column_name,
+                value: val,
+            },
+        })
+    }
+
+    fn parse_update(&mut self) -> Result<Statement, String> {
+        let table_name = self.expect_identifier()?;
+
+        // SET column = new_value
+        self.expect_keyword(Keyword::Set)?;
+        let set_column = self.expect_identifier()?;
+        match self.consume() {
+            Token::Equals => {}
+            t => return Err(format!("Expected '=', found {:?}", t)),
+        }
+        let set_value = self.parse_value()?;
+
+        // WHERE column = match_value
+        self.expect_keyword(Keyword::Where)?;
+        let where_column = self.expect_identifier()?;
+        match self.consume() {
+            Token::Equals => {}
+            t => return Err(format!("Expected '=', found {:?}", t)),
+        }
+        let where_value = self.parse_value()?;
+
+        Ok(Statement::Update {
+            table_name,
+            column: set_column,
+            value: set_value,
+            where_clause: WhereClause {
+                column: where_column,
+                value: where_value,
+            },
+        })
+    }
 }
 
-// ─── Public API (Part E) — YOU WRITE THIS ─────────────────────────────────────
+// ─── Public API ───────────────────────────────────────────────────────────────
 
 pub fn parse(input: &str) -> Result<Statement, String> {
-    let cleaned = input.trim_end_matches(";");
+    let cleaned = input.trim_end_matches(';');
     let tokens = tokenize(cleaned)?;
     let mut parser = Parser::new(tokens);
     match parser.consume() {
-        Token::Keyword(Keyword::Create) => {
-            parser.parse_create_table()
-        }
-        Token::Keyword(Keyword::Insert) => {
-            parser.parse_insert()
-        }
-        Token::Keyword(Keyword::Select) => {
-            parser.parse_select()
-        }
-        _ => {
-            Err(format!("Unknow statment is passed {:?}",parser))
-        }
+        Token::Keyword(Keyword::Create) => parser.parse_create_table(),
+        Token::Keyword(Keyword::Insert) => parser.parse_insert(),
+        Token::Keyword(Keyword::Select) => parser.parse_select(),
+        Token::Keyword(Keyword::Delete) => parser.parse_delete(),
+        Token::Keyword(Keyword::Update) => parser.parse_update(),
+        _ => Err(format!("Unknown statement, parser state: {:?}", parser)),
     }
 }
