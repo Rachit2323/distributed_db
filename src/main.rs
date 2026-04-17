@@ -3,6 +3,7 @@ mod parser;
 mod storage;
 mod executor;
 mod wal;
+mod index;
 
 use std::io::{self, BufRead, Write};
 use crate::r#type::{QueryResult, Value};
@@ -59,6 +60,8 @@ fn main() {
             QueryResult::Updated(n) => println!("{} row(s) updated.", n),
             QueryResult::Error(e) => println!("Error: {}", e),
             QueryResult::Rows { columns, rows } => print_rows(columns, rows),
+            QueryResult::IndexCreated => todo!(),
+            QueryResult::IndexDropped => todo!(),
         }
     }
 

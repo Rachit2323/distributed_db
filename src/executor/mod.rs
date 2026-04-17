@@ -158,6 +158,8 @@ impl Executor {
             Statement::Update { table_name, column, value, where_clause } => {
                 self.handle_update(table_name, column, value, where_clause)
             }
+            Statement::CreateIndex { table_name, column } => todo!(),
+            Statement::DropIndex { table_name, column } => todo!(),
         }
     }
    pub fn handle_delete(&mut self, table_name: String, where_clause :WhereClause) -> QueryResult{

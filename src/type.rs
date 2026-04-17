@@ -41,6 +41,8 @@ pub enum Statement {
     Select      { table_name: String, where_clause: Option<WhereClause> },
     Delete       { table_name: String, where_clause: WhereClause },
     Update       { table_name: String, column: String, value: Value, where_clause: WhereClause },
+      CreateIndex { table_name: String, column: String },
+  DropIndex   { table_name: String, column: String }
 }
 
 pub enum QueryResult {
@@ -50,4 +52,6 @@ pub enum QueryResult {
     Deleted(usize),
     Updated(usize),
     Error(String),
+      IndexCreated,
+  IndexDropped,
 }

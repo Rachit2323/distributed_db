@@ -19,6 +19,9 @@ enum Keyword {
     Set,
     Primary,
     Key,
+    Index,
+    On,
+    Drop,
 }
 
 // ─── Tokens ───────────────────────────────────────────────────────────────────
@@ -56,6 +59,9 @@ fn word_to_token(word: &str) -> Token {
         "SET" => Token::Keyword(Keyword::Set),
         "PRIMARY" => Token::Keyword(Keyword::Primary),
         "KEY" => Token::Keyword(Keyword::Key),
+        "INDEX" => Token::Keyword(Keyword::Index),
+        "ON" => Token::Keyword(Keyword::On),
+        "DROP" => Token::Keyword(Keyword::Drop),
         _ => Token::Identifier(word.to_string()),
     }
 }
@@ -248,12 +254,10 @@ impl Parser {
             let data_type = self.parse_data_type()?;
 
             if let Some(Token::Keyword(Keyword::Primary)) = self.peek() {
-                self.consume(); 
+                self.consume();
                 self.expect_keyword(Keyword::Key)?; // consume KEY
                 primary_key = Some(column_name.clone());
             }
-
-          
 
             columns.push(ColumnDef {
                 name: column_name,
@@ -387,6 +391,56 @@ impl Parser {
             },
         })
     }
+
+    fn parse_create_index(&mut self) -> Result<Statement, String> {
+        self.expect_keyword(Keyword::Index)?;
+        self.expect_keyword(Keyword::On)?;
+        let table_name = self.expect_identifier()?;
+
+        let lparen = self.consume();
+        match lparen {
+            Token::LParen => {}
+            _ => return Err("Lparent not found ".to_string()),
+        }
+
+        let column = self.expect_identifier()?;
+
+        let rparen = self.consume();
+        match rparen {
+            Token::RParen => {}
+            _ => return Err("RParen not found ".to_string()),
+        }
+
+        return Ok(Statement::CreateIndex {
+            table_name: table_name,
+            column: column,
+        });
+    }
+
+    fn parse_drop_index(&mut self) -> Result<Statement, String> {
+        self.expect_keyword(Keyword::Index)?;
+        self.expect_keyword(Keyword::On)?;
+        let table_name = self.expect_identifier()?;
+
+        let lparen = self.consume();
+        match lparen {
+            Token::LParen => {}
+            _ => return Err("Lparent not found ".to_string()),
+        }
+
+        let column = self.expect_identifier()?;
+
+        let rparen = self.consume();
+        match rparen {
+            Token::RParen => {}
+            _ => return Err("RParen not found ".to_string()),
+        }
+
+        return Ok(Statement::DropIndex {
+            table_name: table_name,
+            column: column,
+        });
+    }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -396,7 +450,11 @@ pub fn parse(input: &str) -> Result<Statement, String> {
     let tokens = tokenize(cleaned)?;
     let mut parser = Parser::new(tokens);
     match parser.consume() {
-        Token::Keyword(Keyword::Create) => parser.parse_create_table(),
+        Token::Keyword(Keyword::Create) => match parser.consume() {
+            Token::Keyword(Keyword::Table) => parser.parse_create_table(),
+            Token::Keyword(Keyword::Index) => parser.parse_create_index(),
+            _ => Err("Expected TABLE or INDEX".to_string()),
+        },
         Token::Keyword(Keyword::Insert) => parser.parse_insert(),
         Token::Keyword(Keyword::Select) => parser.parse_select(),
         Token::Keyword(Keyword::Delete) => parser.parse_delete(),
