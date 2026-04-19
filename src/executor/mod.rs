@@ -1,6 +1,7 @@
 use crate::r#type::*;
 use crate::storage;
 use crate::storage::create_table;
+use crate::wal;
 use std::collections::HashMap;
 
 pub struct Executor {
@@ -9,8 +10,9 @@ pub struct Executor {
 
 impl Executor {
     pub fn new() -> Result<Self, String> {
-        let schema = storage::load_schemas()?;
-        return Ok(Executor { schemas: schema });
+        let schemas = storage::load_schemas()?;
+        wal::recover(&schemas)?;
+        return Ok(Executor { schemas });
     }
 
     fn handle_create_table(&mut self, table_name: String, columns: Vec<ColumnDef>, primary_key: Option<String>) -> QueryResult {
@@ -82,13 +84,18 @@ impl Executor {
             }
         }
 
-        // step 5: write to disk
+        // step 5: WAL + write to disk
         let row = Row { values };
+        if let Err(e) = wal::write_entry(&table_name, &row) {
+            return QueryResult::Error(e);
+        }
         if let Err(e) = storage::append_row(&table_name, &row) {
             return QueryResult::Error(e);
         }
+        if let Err(e) = wal::clear_entry(&table_name) {
+            return QueryResult::Error(e);
+        }
 
-        // TODO Phase 2: WAL
         QueryResult::Inserted
     }
 
