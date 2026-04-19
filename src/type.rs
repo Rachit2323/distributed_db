@@ -4,7 +4,7 @@ pub enum DataType {
     Text,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Value {
     Integer(i64),
     Text(String),
@@ -21,7 +21,7 @@ pub struct ColumnDef {
 pub struct TableSchema {
     pub name: String,
     pub columns: Vec<ColumnDef>,
-      pub primary_key: Option<String>,
+    pub primary_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,22 +36,49 @@ pub struct WhereClause {
 }
 
 pub enum Statement {
-    CreateTable { table_name: String, columns: Vec<ColumnDef>, primary_key: Option<String> },
-    Insert      { table_name: String, values: Vec<Value> },
-    Select      { table_name: String, where_clause: Option<WhereClause> },
-    Delete       { table_name: String, where_clause: WhereClause },
-    Update       { table_name: String, column: String, value: Value, where_clause: WhereClause },
-      CreateIndex { table_name: String, column: String },
-  DropIndex   { table_name: String, column: String }
+    CreateTable {
+        table_name: String,
+        columns: Vec<ColumnDef>,
+        primary_key: Option<String>,
+    },
+    Insert {
+        table_name: String,
+        values: Vec<Value>,
+    },
+    Select {
+        table_name: String,
+        where_clause: Option<WhereClause>,
+    },
+    Delete {
+        table_name: String,
+        where_clause: WhereClause,
+    },
+    Update {
+        table_name: String,
+        column: String,
+        value: Value,
+        where_clause: WhereClause,
+    },
+    CreateIndex {
+        table_name: String,
+        column: String,
+    },
+    DropIndex {
+        table_name: String,
+        column: String,
+    },
 }
 
 pub enum QueryResult {
     Created,
     Inserted,
-    Rows { columns: Vec<String>, rows: Vec<Row> },
+    Rows {
+        columns: Vec<String>,
+        rows: Vec<Row>,
+    },
     Deleted(usize),
     Updated(usize),
     Error(String),
-      IndexCreated,
-  IndexDropped,
+    IndexCreated,
+    IndexDropped,
 }
