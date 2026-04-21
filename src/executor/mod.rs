@@ -3,11 +3,16 @@ use crate::storage;
 use crate::storage::create_table;
 use crate::raft::RaftNode;
 use crate::wal;
+use crate::index;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::fs;
+
+const DATA_DIR: &str = "./data";
 
 pub struct Executor {
     schemas: HashMap<String, TableSchema>,
+    indexes: HashMap<String, index::Index>,
     raft: Arc<Mutex<RaftNode>>,
 }
 
@@ -15,7 +20,28 @@ impl Executor {
     pub fn new(id: u64, peers: Vec<String>, raft_node: Arc<Mutex<RaftNode>>) -> Result<Self, String> {
         let schemas = storage::load_schemas()?;
         wal::recover(&schemas)?;
-        return Ok(Executor { schemas, raft: raft_node });
+
+        // load existing indexes from disk
+        let mut indexes = HashMap::new();
+        if let Ok(entries) = fs::read_dir(DATA_DIR) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("index") { continue; }
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                // stem is "users_id" → split on last '_'
+                if let Some(pos) = stem.rfind('_') {
+                    let table_name = &stem[..pos];
+                    let column = &stem[pos+1..];
+                    if let Some(schema) = schemas.get(table_name) {
+                        if let Ok(idx) = index::load(table_name, column, schema) {
+                            indexes.insert(stem.clone(), idx);
+                        }
+                    }
+                }
+            }
+        }
+
+        return Ok(Executor { schemas, indexes, raft: raft_node });
     }
 
     fn handle_create_table(&mut self, table_name: String, columns: Vec<ColumnDef>, primary_key: Option<String>) -> QueryResult {
@@ -103,6 +129,19 @@ impl Executor {
             return QueryResult::Error(e);
         }
 
+        // step 6: update any indexes for this table
+        let schema = self.schemas.get(&table_name).unwrap();
+        let position = match storage::read_rows(&table_name, schema) {
+            Ok(rows) => rows.len().saturating_sub(1),
+            Err(_)   => 0,
+        };
+        let schema = self.schemas.get(&table_name).unwrap().clone();
+        for (key, idx) in self.indexes.iter_mut() {
+            if key.starts_with(&format!("{}_", table_name)) {
+                index::update_on_insert(idx, &schema, &row, position);
+            }
+        }
+
         QueryResult::Inserted
     }
 
@@ -119,29 +158,34 @@ impl Executor {
             Ok(rows) => rows,
         };
 
-        // TODO Phase 3: check index before full scan
-
         // step 3: filter by WHERE clause if one exists
         let rows = match where_clause {
-            // no WHERE → return everything
             None => all_rows,
-
-            // WHERE exists → filter
             Some(wc) => {
-                // find which column position to check
-                let col_index = schema.columns
-                    .iter()
-                    .position(|c| c.name == wc.column);
-
-                match col_index {
-                    None => return QueryResult::Error(format!(
-                        "Column '{}' does not exist in table '{}'",
-                        wc.column, table_name
-                    )),
-                    Some(idx) => all_rows
-                        .into_iter()
-                        .filter(|row| row.values.get(idx) == Some(&wc.value))
-                        .collect(),
+                // check if index exists for this column
+                let index_key = format!("{}_{}", table_name, wc.column);
+                if let Some(idx) = self.indexes.get(&index_key) {
+                    // use index lookup — get row positions
+                    let positions = index::lookup(idx, &wc.value);
+                    match positions {
+                        None => vec![],
+                        Some(pos_list) => pos_list
+                            .iter()
+                            .filter_map(|&p| all_rows.get(p).cloned())
+                            .collect(),
+                    }
+                } else {
+                    // fall back to full scan
+                    let col_index = schema.columns.iter().position(|c| c.name == wc.column);
+                    match col_index {
+                        None => return QueryResult::Error(format!(
+                            "Column '{}' does not exist in table '{}'", wc.column, table_name
+                        )),
+                        Some(idx) => all_rows
+                            .into_iter()
+                            .filter(|row| row.values.get(idx) == Some(&wc.value))
+                            .collect(),
+                    }
                 }
             }
         };
@@ -172,10 +216,36 @@ impl Executor {
             Statement::Update { table_name, column, value, where_clause } => {
                 self.handle_update(table_name, column, value, where_clause)
             }
-            Statement::CreateIndex { table_name, column } => todo!(),
-            Statement::DropIndex { table_name, column } => todo!(),
+            Statement::CreateIndex { table_name, column } => self.handle_create_index(table_name, column),
+            Statement::DropIndex { table_name, column } => self.handle_drop_index(table_name, column),
         }
     }
+    fn handle_create_index(&mut self, table_name: String, column: String) -> QueryResult {
+        let schema = match self.schemas.get(&table_name) {
+            None    => return QueryResult::Error(format!("Table '{}' does not exist", table_name)),
+            Some(s) => s,
+        };
+        let rows = match storage::read_rows(&table_name, schema) {
+            Err(e)   => return QueryResult::Error(e),
+            Ok(rows) => rows,
+        };
+        let idx = index::build(&table_name, &column, schema, rows);
+        if let Err(e) = index::save(&idx) {
+            return QueryResult::Error(e);
+        }
+        let key = format!("{}_{}", table_name, column);
+        self.indexes.insert(key, idx);
+        QueryResult::IndexCreated
+    }
+
+    fn handle_drop_index(&mut self, table_name: String, column: String) -> QueryResult {
+        let key = format!("{}_{}", table_name, column);
+        self.indexes.remove(&key);
+        let file_path = format!("{}/{}_{}.index", DATA_DIR, table_name, column);
+        let _ = fs::remove_file(file_path);
+        QueryResult::IndexDropped
+    }
+
    pub fn handle_delete(&mut self, table_name: String, where_clause :WhereClause) -> QueryResult{
      
      let schema = match self.schemas.get(&table_name) {
