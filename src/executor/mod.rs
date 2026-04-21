@@ -1,18 +1,21 @@
 use crate::r#type::*;
 use crate::storage;
 use crate::storage::create_table;
+use crate::raft::RaftNode;
 use crate::wal;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 pub struct Executor {
     schemas: HashMap<String, TableSchema>,
+    raft: Arc<Mutex<RaftNode>>,
 }
 
 impl Executor {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(id: u64, peers: Vec<String>, raft_node: Arc<Mutex<RaftNode>>) -> Result<Self, String> {
         let schemas = storage::load_schemas()?;
         wal::recover(&schemas)?;
-        return Ok(Executor { schemas });
+        return Ok(Executor { schemas, raft: raft_node });
     }
 
     fn handle_create_table(&mut self, table_name: String, columns: Vec<ColumnDef>, primary_key: Option<String>) -> QueryResult {
@@ -83,6 +86,10 @@ impl Executor {
                 ));
             }
         }
+
+          if let Err(e) = self.raft.lock().unwrap().propose(format!("INSERT|{}", table_name)) {
+      return QueryResult::Error(e);           
+  }
 
         // step 5: WAL + write to disk
         let row = Row { values };

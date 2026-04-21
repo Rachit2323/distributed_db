@@ -4,6 +4,7 @@ use std::io::Write;
 use crate::r#type::{DataType, Row, TableSchema, Value};
 use crate::storage;
 
+
 const DATA_DIR: &str = "./data";
 
 pub fn write_entry(table_name: &str, row: &Row) -> Result<(), String> {
